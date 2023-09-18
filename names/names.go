@@ -45,6 +45,7 @@ const (
 	KendraEndpointID                     = "kendra"
 	KeyspacesEndpointID                  = "keyspaces"
 	LambdaEndpointID                     = "lambda"
+	MediaConnectEndpointID               = "mediaconnect"
 	MediaLiveEndpointID                  = "medialive"
 	ObservabilityAccessManagerEndpointID = "oam"
 	OpenSearchServerlessEndpointID       = "aoss"
