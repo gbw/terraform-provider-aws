@@ -10,25 +10,39 @@ import (
 	"log"
 	"time"
 
+	"github.com/YakDriver/regexache"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/aws/aws-sdk-go-v2/service/mediaconnect"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/mediaconnect/types"
+	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	datasourceschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/hashicorp/terraform-provider-aws/internal/conns"
 	"github.com/hashicorp/terraform-provider-aws/internal/create"
 	"github.com/hashicorp/terraform-provider-aws/internal/enum"
-	"github.com/hashicorp/terraform-provider-aws/internal/flex"
+	"github.com/hashicorp/terraform-provider-aws/internal/errs"
+	"github.com/hashicorp/terraform-provider-aws/internal/framework"
+	"github.com/hashicorp/terraform-provider-aws/internal/framework/flex"
+	fwtypes "github.com/hashicorp/terraform-provider-aws/internal/framework/types"
+	fwvalidators "github.com/hashicorp/terraform-provider-aws/internal/framework/validators"
 	tftags "github.com/hashicorp/terraform-provider-aws/internal/tags"
 	"github.com/hashicorp/terraform-provider-aws/internal/tfresource"
-	"github.com/hashicorp/terraform-provider-aws/internal/verify"
 	"github.com/hashicorp/terraform-provider-aws/names"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
-	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 )
 
 // Function annotations are used for resource registration to the Provider. DO NOT EDIT.
@@ -81,7 +95,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 			},
 			"start_flow": schema.BoolAttribute{
 				Optional: true,
-				Default:  false,
+				Default:  booldefault.StaticBool(false),
 			},
 			names.AttrTags:    tftags.TagsAttribute(),
 			names.AttrTagsAll: tftags.TagsAttributeComputedOnly(),
@@ -106,9 +120,9 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 						},
 						"status": schema.StringAttribute{
 							Optional: true,
-							Default:  awstypes.EntitlementStatusEnabled,
+							Default:  stringdefault.StaticString(string(awstypes.EntitlementStatusEnabled)),
 							Validators: []validator.String{
-								stringvalidator.OneOf(mediaconnect.EntitlementStatus_Values()...),
+								enum.FrameworkValidate[awstypes.EntitlementStatus](),
 							},
 						},
 						"name": schema.StringAttribute{
@@ -129,7 +143,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 						"day": schema.StringAttribute{
 							Required: true,
 							Validators: []validator.String{
-								stringvalidator.OneOf(mediaconnect.MaintenanceDay_Values()...),
+								enum.FrameworkValidate[awstypes.MaintenanceDay](),
 							},
 						},
 						"deadline": schema.StringAttribute{
@@ -157,7 +171,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 						"type": schema.StringAttribute{
 							Required: true,
 							Validators: []validator.String{
-								stringvalidator.OneOf(mediaconnect.MediaStreamType_Values()...),
+								enum.FrameworkValidate[awstypes.MediaStreamType](),
 							},
 						},
 						"clock_rate": schema.Int64Attribute{
@@ -200,7 +214,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 												"colorimetry": schema.StringAttribute{
 													Optional: true,
 													Validators: []validator.String{
-														stringvalidator.OneOf(mediaconnect.Colorimetry_Values()...),
+														enum.FrameworkValidate[awstypes.Colorimetry](),
 													},
 												},
 												"exact_framerate": schema.StringAttribute{
@@ -212,19 +226,19 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 												"range": schema.StringAttribute{
 													Optional: true,
 													Validators: []validator.String{
-														stringvalidator.OneOf(mediaconnect.Range_Values()...),
+														enum.FrameworkValidate[awstypes.Range](),
 													},
 												},
 												"scan_mode": schema.StringAttribute{
 													Optional: true,
 													Validators: []validator.String{
-														stringvalidator.OneOf(mediaconnect.ScanMode_Values()...),
+														enum.FrameworkValidate[awstypes.ScanMode](),
 													},
 												},
 												"tcs": schema.StringAttribute{
 													Optional: true,
 													Validators: []validator.String{
-														stringvalidator.OneOf(mediaconnect.Tcs_Values()...),
+														enum.FrameworkValidate[awstypes.Tcs](),
 													},
 												},
 											},
@@ -257,7 +271,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 						"protocol": schema.StringAttribute{
 							Required: true,
 							Validators: []validator.String{
-								stringvalidator.OneOf(mediaconnect.Protocol_Values()...),
+								enum.FrameworkValidate[awstypes.Protocol](),
 							},
 						},
 						"bridge_arn": framework.ARNAttributeComputedOnly(),
@@ -305,7 +319,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 									"encoding_name": schema.StringAttribute{
 										Required: true,
 										Validators: []validator.String{
-											stringvalidator.OneOf(mediaconnect.EncodingName_Values()...),
+											enum.FrameworkValidate[awstypes.EncodingName](),
 										},
 									},
 									"name": schema.StringAttribute{
@@ -318,7 +332,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 											Attributes: map[string]schema.Attribute{
 												"ip": schema.StringAttribute{
 													Required: true,
-													Validators: []validator.Validator{
+													Validators: []validator.String{
 														fwvalidators.IPv4Address(),
 													},
 												},
@@ -360,7 +374,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 												"encoder_profile": schema.StringAttribute{
 													Required: true,
 													Validators: []validator.String{
-														stringvalidator.OneOf(mediaconnect.EncoderProfile_Values()...),
+														enum.FrameworkValidate[awstypes.EncoderProfile](),
 													},
 												},
 											},
@@ -396,7 +410,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 							Optional: true,
 							Computed: true,
 							Validators: []validator.String{
-								stringvalidator.OneOf(mediaconnect.FailoverMode_Values()...),
+								enum.FrameworkValidate[awstypes.FailoverMode](),
 							},
 						},
 						"recovery_window": schema.Int64Attribute{
@@ -407,7 +421,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 							Optional: true,
 							Computed: true,
 							Validators: []validator.String{
-								stringvalidator.OneOf(mediaconnect.State_Values()...),
+								enum.FrameworkValidate[awstypes.State](),
 							},
 						},
 					},
@@ -479,7 +493,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 							Optional: true,
 							Computed: true,
 							Validators: []validator.String{
-								stringvalidator.OneOf(mediaconnect.Protocol_Values()...),
+								enum.FrameworkValidate[awstypes.Protocol](),
 							},
 						},
 						"sender_control_port": schema.Int64Attribute{
@@ -488,7 +502,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 						"sender_ip_address": schema.StringAttribute{
 							Optional: true,
 							Computed: true,
-							Validators: []validator.Validator{
+							Validators: []validator.String{
 								fwvalidators.IPv4Address(),
 							},
 						},
@@ -509,9 +523,11 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 							Computed: true,
 						},
 						"whitelist_cidr": schema.StringAttribute{
-							Optional:     true,
-							Computed:     true,
-							ValidateFunc: validation.IsCIDRNetwork(0, 128),
+							Optional: true,
+							Computed: true,
+							Validators: []validator.String{
+								fwvalidators.IPv4CIDRNetworkAddress(),
+							},
 						},
 					},
 					Blocks: map[string]schema.Block{
@@ -550,7 +566,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 									"encoding_name": schema.StringAttribute{
 										Required: true,
 										Validators: []validator.String{
-											stringvalidator.OneOf(mediaconnect.EncodingName_Values()...),
+											enum.FrameworkValidate[awstypes.EncodingName](),
 										},
 									},
 									"name": schema.StringAttribute{
@@ -563,7 +579,7 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 											Attributes: map[string]schema.Attribute{
 												"ip": schema.StringAttribute{
 													Required: true,
-													Validators: []validator.Validator{
+													Validators: []validator.String{
 														fwvalidators.IPv4Address(),
 													},
 												},
@@ -633,9 +649,9 @@ func (r *resourceFlow) Schema(ctx context.Context, req resource.SchemaRequest, r
 						},
 						"network_interface_type": schema.StringAttribute{
 							Optional: true,
-							Default:  types.NetworkInterfaceTypeEna,
+							Default:  stringdefault.StaticString(string(awstypes.NetworkInterfaceTypeEna)),
 							Validators: []validator.String{
-								stringvalidator.OneOf(mediaconnect.NetworkInterfaceType_Values()...),
+								enum.FrameworkValidate[awstypes.NetworkInterfaceType](),
 							},
 						},
 					},
@@ -659,7 +675,7 @@ func encryptionBlock() datasourceschema.Block {
 				"algorithm": schema.StringAttribute{
 					Required: true,
 					Validators: []validator.String{
-						stringvalidator.OneOf(mediaconnect.Algorithm_Values()...),
+						enum.FrameworkValidate[awstypes.Algorithm](),
 					},
 				},
 				"constant_initialization_vector": schema.StringAttribute{
@@ -674,7 +690,7 @@ func encryptionBlock() datasourceschema.Block {
 					Optional: true,
 					Computed: true,
 					Validators: []validator.String{
-						stringvalidator.OneOf(mediaconnect.KeyType_Values()...),
+						enum.FrameworkValidate[awstypes.KeyType](),
 					},
 				},
 				"region": schema.StringAttribute{
@@ -709,7 +725,7 @@ func transportBlock() datasourceschema.Block {
 				"protocol": schema.StringAttribute{
 					Required: true,
 					Validators: []validator.String{
-						stringvalidator.OneOf(mediaconnect.Protocol_Values()...),
+						enum.FrameworkValidate[awstypes.Protocol](),
 					},
 				},
 				"cidr_allow_list": schema.SetAttribute{
@@ -744,7 +760,7 @@ func transportBlock() datasourceschema.Block {
 				"sender_ip_address": schema.StringAttribute{
 					Optional: true,
 					Computed: true,
-					Validators: []validator.Validator{
+					Validators: []validator.String{
 						fwvalidators.IPv4Address(),
 					},
 				},
@@ -802,10 +818,10 @@ func (r *resourceFlow) Create(ctx context.Context, req resource.CreateRequest, r
 		in.Source = &sources[0]
 		in.Sources = sources[1:]
 	}
-	if !plan.SourceFailoverConfig() {
+	if !plan.SourceFailoverConfig.IsNull() {
 		in.SourceFailoverConfig = flex.ExpandFrameworkListNestedBlockPtr(ctx, plan.SourceFailoverConfig, r.expandSourceFailoverConfigCreate)
 	}
-	if !plan.VpcInterfaces() {
+	if !plan.VpcInterfaces.IsNull() {
 		in.VpcInterfaces = flex.ExpandFrameworkSetNestedBlock(ctx, plan.VpcInterfaces, r.expandVPCInterfaceCreate)
 	}
 
@@ -825,10 +841,10 @@ func (r *resourceFlow) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	plan.ARN = flex.StringToFramework(ctx, out.Flow.FlowArn)
+	plan.FlowArn = flex.StringToFrameworkARN(ctx, out.Flow.FlowArn, &resp.Diagnostics)
 
 	createTimeout := r.CreateTimeout(ctx, plan.Timeouts)
-	_, err = waitFlowCreated(ctx, conn, plan.ARN.String(), createTimeout)
+	_, err = waitFlowCreated(ctx, conn, plan.FlowArn.String(), createTimeout)
 	if err != nil {
 		resp.Diagnostics.AddError(
 			create.ProblemStandardMessage(names.MediaConnect, create.ErrActionWaitingForCreation, ResNameFlow, plan.Name.String(), err),
@@ -849,25 +865,25 @@ func (r *resourceFlow) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	out, err := findFlowByARN(ctx, conn, state.FlowArn.ValueString())
+	out, err := findFlowByARN(ctx, conn, state.FlowArn.String())
 	if tfresource.NotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return
 	}
 	if err != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.MediaConnect, create.ErrActionSetting, ResNameFlow, state.ID.String(), err),
+			create.ProblemStandardMessage(names.MediaConnect, create.ErrActionSetting, ResNameFlow, state.FlowArn.String(), err),
 			err.Error(),
 		)
 		return
 	}
 
-	state.FlowArn = flex.StringToFramework(ctx, out.FlowArn)
+	state.FlowArn = flex.StringToFrameworkARN(ctx, out.FlowArn, &resp.Diagnostics)
 	state.Name = flex.StringToFramework(ctx, out.Name)
 	state.AvailabilityZone = flex.StringToFramework(ctx, out.AvailabilityZone)
 	state.Entitlements = flex.FlattenFrameworkListNestedBlock[entitlementData](ctx, out.Entitlements, r.flattenEntitlement)
-	state.Maintenance = flex.FlattenFrameworkListNestedBlock[maintenanceData](ctx, out.Maintenance, r.flattenMaintenance)
-	state.MediaStreams = flex.FlattenFrameworkListNestedBlock[mediaStreamData](ctx, out.Entitlements, r.flattenMediaStream)
+	state.Maintenance = flex.FlattenFrameworkListNestedBlockPtr[maintenanceData](ctx, out.Maintenance, r.flattenMaintenance)
+	state.MediaStreams = flex.FlattenFrameworkListNestedBlock[mediaStreamData](ctx, out.MediaStreams, r.flattenMediaStream)
 	state.Outputs = flex.FlattenFrameworkListNestedBlock[outputData](ctx, out.Outputs, r.flattenOutput)
 	sources := []awstypes.Source{*out.Source}
 	sources = append(sources, out.Sources...)
@@ -875,7 +891,7 @@ func (r *resourceFlow) Read(ctx context.Context, req resource.ReadRequest, resp 
 	state.SourceFailoverConfig = flex.FlattenFrameworkListNestedBlock[sourceFailoverConfigData](ctx, out.SourceFailoverConfig, r.flattenSourceFailoverConfig)
 	state.VpcInterfaces = flex.FlattenFrameworkListNestedBlock[vpcInterfaceData](ctx, out.VpcInterfaces, r.flattenVPCInterface)
 	state.EgressIp = flex.StringToFramework(ctx, out.EgressIp)
-	state.Status = flex.StringToFramework(ctx, out.Status)
+	state.Status = flex.StringValueToFramework(ctx, out.Status)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -894,7 +910,7 @@ func (r *resourceFlow) Update(ctx context.Context, req resource.UpdateRequest, r
 		!plan.SourceFailoverConfig.Equal(state.SourceFailoverConfig) {
 
 		in := &mediaconnect.UpdateFlowInput{
-			FlowArn: aws.String(plan.FlowArn.ValueString()),
+			FlowArn: aws.String(plan.FlowArn.String()),
 		}
 
 		if !plan.Maintenance.IsNull() {
@@ -908,27 +924,27 @@ func (r *resourceFlow) Update(ctx context.Context, req resource.UpdateRequest, r
 		out, err := conn.UpdateFlow(ctx, in)
 		if err != nil {
 			resp.Diagnostics.AddError(
-				create.ProblemStandardMessage(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, plan.ARN.String(), err),
+				create.ProblemStandardMessage(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, plan.FlowArn.String(), err),
 				err.Error(),
 			)
 			return
 		}
 		if out == nil || out.Flow == nil {
 			resp.Diagnostics.AddError(
-				create.ProblemStandardMessage(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, plan.ARN.String(), nil),
+				create.ProblemStandardMessage(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, plan.FlowArn.String(), nil),
 				errors.New("empty output").Error(),
 			)
 			return
 		}
 
-		plan.ARN = flex.StringToFramework(ctx, out.Flow.FlowArn)
+		plan.FlowArn = flex.StringToFrameworkARN(ctx, out.Flow.FlowArn, &resp.Diagnostics)
 	}
 
 	updateTimeout := r.UpdateTimeout(ctx, plan.Timeouts)
-	_, err := waitFlowUpdated(ctx, conn, plan.ARN.String(), updateTimeout)
+	_, err := waitFlowUpdated(ctx, conn, plan.FlowArn.String(), updateTimeout)
 	if err != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.MediaConnect, create.ErrActionWaitingForUpdate, ResNameFlow, plan.ARN.String(), err),
+			create.ProblemStandardMessage(names.MediaConnect, create.ErrActionWaitingForUpdate, ResNameFlow, plan.FlowArn.String(), err),
 			err.Error(),
 		)
 		return
@@ -937,112 +953,45 @@ func (r *resourceFlow) Update(ctx context.Context, req resource.UpdateRequest, r
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func resourceFlowUpdate(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	conn := meta.(*conns.AWSClient).MediaConnectClient(ctx)
+func (r *resourceFlow) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+	conn := r.Meta().MediaConnectClient(ctx)
 
-	if d.HasChangesExcept("tags", "tags_all", "start_flow") {
-		in := &mediaconnect.UpdateFlowInput{
-			FlowArn: aws.String(d.Id()),
-		}
-
-		if d.HasChange("maintenance") {
-			in.Maintenance = expandFlowMaintenanceCreate(v.([]interface{}))
-			in.Maintenance = expandFlowMaintenanceUpdate(d.Get("maintenance").([]interface{}))
-		}
-
-		if d.HasChange("source_failover_config") {
-			in.SourceFailoverConfig = expandFlowSourceFailoverConfigUpdate(d.Get("source_failover_config").([]interface{}))
-		}
-
-		flow, err := findFlowByARN(ctx, conn, d.Id())
-
-		if err != nil {
-			return create.DiagError(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, d.Id(), err)
-		}
-
-		if flow.Status == types.StatusActive {
-			if err := stopFlow(ctx, conn, d.Timeout(schema.TimeoutUpdate), d.Id()); err != nil {
-				return create.DiagError(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, d.Id(), err)
-			}
-		}
-
-		out, err := conn.UpdateFlow(ctx, in)
-		if err != nil {
-			return create.DiagError(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, d.Id(), err)
-		}
-
-		if _, err := waitFlowUpdated(ctx, conn, aws.ToString(out.Flow.FlowArn), d.Timeout(schema.TimeoutUpdate)); err != nil {
-			return create.DiagError(names.MediaConnect, create.ErrActionWaitingForUpdate, ResNameFlow, d.Id(), err)
-		}
+	var state resourceFlowData
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
-	if d.Get("start_flow").(bool) {
-		if err := startFlow(ctx, conn, d.Timeout(schema.TimeoutUpdate), d.Id()); err != nil {
-			return create.DiagError(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, d.Get("name").(string), err)
-		}
+	in := &mediaconnect.DeleteFlowInput{
+		FlowArn: aws.String(state.FlowArn.String()),
 	}
 
-	if d.HasChange("start_flow") {
-		flow, err := findFlowByARN(ctx, conn, d.Id())
-
-		if err != nil {
-			return create.DiagError(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, d.Id(), err)
+	_, err := conn.DeleteFlow(ctx, in)
+	if err != nil {
+		var nfe *awstypes.ResourceNotFoundException
+		if errors.As(err, &nfe) {
+			return
 		}
-
-		switch d.Get("start_flow").(bool) {
-		case true:
-			if flow.Status == types.StatusStandby {
-				if err := startFlow(ctx, conn, d.Timeout(schema.TimeoutUpdate), d.Id()); err != nil {
-					return create.DiagError(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, d.Id(), err)
-				}
-			}
-		default:
-			if flow.Status == types.StatusActive {
-				if err := stopFlow(ctx, conn, d.Timeout(schema.TimeoutUpdate), d.Id()); err != nil {
-					return create.DiagError(names.MediaConnect, create.ErrActionUpdating, ResNameFlow, d.Id(), err)
-				}
-			}
-		}
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.MediaConnect, create.ErrActionDeleting, ResNameFlow, state.FlowArn.String(), err),
+			err.Error(),
+		)
+		return
 	}
 
-	return resourceFlowRead(ctx, d, meta)
+	deleteTimeout := r.DeleteTimeout(ctx, state.Timeouts)
+	_, err = waitFlowDeleted(ctx, conn, state.FlowArn.String(), deleteTimeout)
+	if err != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.MediaConnect, create.ErrActionWaitingForDeletion, ResNameFlow, state.FlowArn.String(), err),
+			err.Error(),
+		)
+		return
+	}
 }
 
-func resourceFlowDelete(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	conn := meta.(*conns.AWSClient).MediaConnectClient(ctx)
-
-	log.Printf("[INFO] Deleting MediaConnect Flow %s", d.Id())
-
-	flow, err := findFlowByARN(ctx, conn, d.Id())
-
-	if err != nil {
-		return create.DiagError(names.MediaConnect, create.ErrActionDeleting, ResNameFlow, d.Id(), err)
-	}
-
-	if flow.Status == types.StatusActive {
-		if err := stopFlow(ctx, conn, d.Timeout(schema.TimeoutDelete), d.Id()); err != nil {
-			return create.DiagError(names.MediaConnect, create.ErrActionDeleting, ResNameFlow, d.Id(), err)
-		}
-	}
-
-	_, err = conn.DeleteFlow(ctx, &mediaconnect.DeleteFlowInput{
-		FlowArn: aws.String(d.Id()),
-	})
-
-	if err != nil {
-		var nfe *types.NotFoundException
-		if errors.As(err, &nfe) {
-			return nil
-		}
-
-		return create.DiagError(names.MediaConnect, create.ErrActionDeleting, ResNameFlow, d.Id(), err)
-	}
-
-	if _, err := waitFlowDeleted(ctx, conn, d.Id(), d.Timeout(schema.TimeoutDelete)); err != nil {
-		return create.DiagError(names.MediaConnect, create.ErrActionWaitingForDeletion, ResNameFlow, d.Id(), err)
-	}
-
-	return nil
+func (r *resourceFlow) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }
 
 func startFlow(ctx context.Context, conn *mediaconnect.Client, timeout time.Duration, id string) error {
@@ -1084,7 +1033,7 @@ func stopFlow(ctx context.Context, conn *mediaconnect.Client, timeout time.Durat
 func waitFlowCreated(ctx context.Context, conn *mediaconnect.Client, id string, timeout time.Duration) (*mediaconnect.DescribeFlowOutput, error) {
 	stateConf := &retry.StateChangeConf{
 		Pending:                   []string{},
-		Target:                    enum.Slice(types.StatusStandby, types.StatusActive),
+		Target:                    enum.Slice(awstypes.StatusStandby, awstypes.StatusActive),
 		Refresh:                   statusFlow(ctx, conn, id),
 		Timeout:                   timeout,
 		NotFoundChecks:            20,
@@ -1101,8 +1050,8 @@ func waitFlowCreated(ctx context.Context, conn *mediaconnect.Client, id string, 
 
 func waitFlowUpdated(ctx context.Context, conn *mediaconnect.Client, id string, timeout time.Duration) (*mediaconnect.DescribeFlowOutput, error) {
 	stateConf := &retry.StateChangeConf{
-		Pending:                   enum.Slice(types.StatusUpdating),
-		Target:                    enum.Slice(types.StatusStandby, types.StatusActive),
+		Pending:                   enum.Slice(awstypes.StatusUpdating),
+		Target:                    enum.Slice(awstypes.StatusStandby, awstypes.StatusActive),
 		Refresh:                   statusFlow(ctx, conn, id),
 		Timeout:                   timeout,
 		NotFoundChecks:            20,
@@ -1119,7 +1068,7 @@ func waitFlowUpdated(ctx context.Context, conn *mediaconnect.Client, id string, 
 
 func waitFlowDeleted(ctx context.Context, conn *mediaconnect.Client, id string, timeout time.Duration) (*mediaconnect.DescribeFlowOutput, error) {
 	stateConf := &retry.StateChangeConf{
-		Pending: enum.Slice(types.StatusDeleting),
+		Pending: enum.Slice(awstypes.StatusDeleting),
 		Target:  []string{},
 		Refresh: statusFlow(ctx, conn, id),
 		Timeout: timeout,
@@ -1135,8 +1084,8 @@ func waitFlowDeleted(ctx context.Context, conn *mediaconnect.Client, id string, 
 
 func waitFlowStarted(ctx context.Context, conn *mediaconnect.Client, id string, timeout time.Duration) (*mediaconnect.DescribeFlowOutput, error) {
 	stateConf := &retry.StateChangeConf{
-		Pending: enum.Slice(types.StatusStarting),
-		Target:  enum.Slice(types.StatusActive),
+		Pending: enum.Slice(awstypes.StatusStarting),
+		Target:  enum.Slice(awstypes.StatusActive),
 		Refresh: statusFlow(ctx, conn, id),
 		Timeout: timeout,
 	}
@@ -1151,8 +1100,8 @@ func waitFlowStarted(ctx context.Context, conn *mediaconnect.Client, id string, 
 
 func waitFlowStopped(ctx context.Context, conn *mediaconnect.Client, arn string, timeout time.Duration) (*mediaconnect.DescribeFlowOutput, error) {
 	stateConf := &retry.StateChangeConf{
-		Pending: enum.Slice(types.StatusStopping),
-		Target:  enum.Slice(types.StatusStandby),
+		Pending: enum.Slice(awstypes.StatusStopping),
+		Target:  enum.Slice(awstypes.StatusStandby),
 		Refresh: statusFlow(ctx, conn, arn),
 		Timeout: timeout,
 	}
@@ -1180,13 +1129,13 @@ func statusFlow(ctx context.Context, conn *mediaconnect.Client, arn string) retr
 	}
 }
 
-func findFlowByARN(ctx context.Context, conn *mediaconnect.Client, arn string) (*mediaconnect.Flow, error) {
+func findFlowByARN(ctx context.Context, conn *mediaconnect.Client, arn string) (*awstypes.Flow, error) {
 	in := &mediaconnect.DescribeFlowInput{
 		FlowArn: aws.String(arn),
 	}
 	out, err := conn.DescribeFlow(ctx, in)
 	if err != nil {
-		var nfe *types.NotFoundException
+		var nfe *awstypes.ResourceNotFoundException
 		if errors.As(err, &nfe) {
 			return nil, &retry.NotFoundError{
 				LastError:   err,
@@ -1214,7 +1163,7 @@ func (r *resourceFlow) expandEntitlement(ctx context.Context, data entitlementDa
 		out.Subscribers = flex.ExpandFrameworkStringValueList(ctx, data.Subscribers)
 	}
 	if !data.DataTransferSubscriberFeePercent.IsNull() {
-		out.DataTransferSubscriberFeePercent = flex.Int64FromFramework(ctx, data.DataTransferSubscriberFeePercent)
+		out.DataTransferSubscriberFeePercent = int32(*flex.Int64FromFramework(ctx, data.DataTransferSubscriberFeePercent))
 	}
 	if !data.Description.IsNull() {
 		out.Description = flex.StringFromFramework(ctx, data.Description)
@@ -1245,26 +1194,26 @@ func (r *resourceFlow) expandEncryption(ctx context.Context, data encryptionData
 
 func (r *resourceFlow) expandMaintenanceCreate(ctx context.Context, data maintenanceData) *awstypes.AddMaintenance {
 	return &awstypes.AddMaintenance{
-		MaintenanceDay:       awstypes.MaintenanceDay(m.MaintenanceDay.ValueString()),
-		MaintenanceStartHour: flex.StringFromFramework(ctx, m.MaintenanceStartHour),
+		MaintenanceDay:       awstypes.MaintenanceDay(data.MaintenanceDay.ValueString()),
+		MaintenanceStartHour: flex.StringFromFramework(ctx, data.MaintenanceStartHour),
 	}
 }
 
 func (r *resourceFlow) expandMaintenanceUpdate(ctx context.Context, data maintenanceData) *awstypes.UpdateMaintenance {
 	return &awstypes.UpdateMaintenance{
-		MaintenanceDay:           awstypes.MaintenanceDay(m.MaintenanceDay.ValueString()),
-		MaintenanceStartHour:     flex.StringFromFramework(ctx, m.MaintenanceStartHour),
-		MaintenanceScheduledDate: flex.StringFromFramework(ctx, m.MaintenanceScheduledDate),
+		MaintenanceDay:           awstypes.MaintenanceDay(data.MaintenanceDay.ValueString()),
+		MaintenanceStartHour:     flex.StringFromFramework(ctx, data.MaintenanceStartHour),
+		MaintenanceScheduledDate: flex.StringFromFramework(ctx, data.MaintenanceScheduledDate),
 	}
 }
 
 func (r *resourceFlow) expandMediaStreamCreate(ctx context.Context, data mediaStreamData) awstypes.AddMediaStreamRequest {
 	return awstypes.AddMediaStreamRequest{
-		MediaStreamId:   flex.Int64FromFramework(ctx, data.MediaStreamId),
+		MediaStreamId:   int32(*flex.Int64FromFramework(ctx, data.MediaStreamId)),
 		MediaStreamName: flex.StringFromFramework(ctx, data.MediaStreamName),
 		MediaStreamType: awstypes.MediaStreamType(data.MediaStreamType.ValueString()),
 		Attributes:      flex.ExpandFrameworkListNestedBlockPtr(ctx, data.Attributes, r.expandMediaStreamAttributeCreate),
-		ClockRate:       flex.Int64FromFramework(ctx, data.ClockRate),
+		ClockRate:       int32(*flex.Int64FromFramework(ctx, data.ClockRate)),
 		Description:     flex.StringFromFramework(ctx, data.Description),
 		VideoFormat:     flex.StringFromFramework(ctx, data.VideoFormat),
 	}
@@ -1308,22 +1257,22 @@ func (r *resourceFlow) expandOutputCreate(ctx context.Context, data outputData) 
 		out.Encryption = flex.ExpandFrameworkListNestedBlockPtr(ctx, data.Encryption, r.expandEncryption)
 	}
 	if !data.MaxLatency.IsNull() {
-		out.MaxLatency = flex.Int64FromFramework(ctx, data.MaxLatency)
+		out.MaxLatency = int32(*flex.Int64FromFramework(ctx, data.MaxLatency))
 	}
 	if !data.MediaStreamOutputConfigurations.IsNull() {
 		out.MediaStreamOutputConfigurations = flex.ExpandFrameworkSetNestedBlock(ctx, data.MediaStreamOutputConfigurations, r.expandMediaStreamOutputConfigurationCreate)
 	}
 	if !data.MinLatency.IsNull() {
-		out.MinLatency = flex.Int64FromFramework(ctx, data.MinLatency)
+		out.MinLatency = int32(*flex.Int64FromFramework(ctx, data.MinLatency))
 	}
 	if !data.Port.IsNull() {
-		out.Port = flex.Int64FromFramework(ctx, data.Port)
+		out.Port = int32(*flex.Int64FromFramework(ctx, data.Port))
 	}
 	if !data.SenderControlPort.IsNull() {
-		out.SenderControlPort = flex.Int64FromFramework(ctx, data.SenderControlPort)
+		out.SenderControlPort = int32(*flex.Int64FromFramework(ctx, data.SenderControlPort))
 	}
 	if !data.SmoothingLatency.IsNull() {
-		out.SmoothingLatency = flex.Int64FromFramework(ctx, data.SmoothingLatency)
+		out.SmoothingLatency = int32(*flex.Int64FromFramework(ctx, data.SmoothingLatency))
 	}
 	if !data.StreamId.IsNull() {
 		out.StreamId = flex.StringFromFramework(ctx, data.StreamId)
@@ -1337,7 +1286,7 @@ func (r *resourceFlow) expandOutputCreate(ctx context.Context, data outputData) 
 
 func (r *resourceFlow) expandMediaStreamOutputConfigurationCreate(ctx context.Context, data mediaStreamOutputConfigurationData) awstypes.MediaStreamOutputConfigurationRequest {
 	out := awstypes.MediaStreamOutputConfigurationRequest{
-		EncodingName:    flex.StringFromFramework(ctx, data.EncodingName),
+		EncodingName:    awstypes.EncodingName(data.EncodingName.ValueString()),
 		MediaStreamName: flex.StringFromFramework(ctx, data.MediaStreamName),
 	}
 
@@ -1348,13 +1297,13 @@ func (r *resourceFlow) expandMediaStreamOutputConfigurationCreate(ctx context.Co
 		out.EncodingParameters = flex.ExpandFrameworkListNestedBlockPtr(ctx, data.EncodingParameters, r.expandMediaStreamOutputConfigurationEncodingParametersCreate)
 	}
 
-	return &out
+	return out
 }
 
 func (r *resourceFlow) expandMediaStreamOutputConfigurationDestinationConfigurationCreate(ctx context.Context, data mediaStreamOutputConfigurationDestinationConfigurationData) awstypes.DestinationConfigurationRequest {
 	return awstypes.DestinationConfigurationRequest{
 		DestinationIp:   flex.StringFromFramework(ctx, data.DestinationIp),
-		DestinationPort: flex.Int64FromFramework(ctx, data.DestinationPort),
+		DestinationPort: int32(*flex.Int64FromFramework(ctx, data.DestinationPort)),
 		Interface:       flex.ExpandFrameworkListNestedBlockPtr(ctx, data.Interface, r.expandInterfaceCreate),
 	}
 }
@@ -1394,22 +1343,22 @@ func (r *resourceFlow) expandSourceCreate(ctx context.Context, data sourceData) 
 		out.GatewayBridgeSource = flex.ExpandFrameworkListNestedBlockPtr(ctx, data.GatewayBridgeSource, r.expandFlowGatewayBridgeSourceCreate)
 	}
 	if !data.IngestPort.IsNull() {
-		out.IngestPort = flex.Int64FromFramework(ctx, data.IngestPort)
+		out.IngestPort = int32(*flex.Int64FromFramework(ctx, data.IngestPort))
 	}
 	if !data.MaxBitrate.IsNull() {
-		out.MaxBitrate = flex.Int64FromFramework(ctx, data.MaxBitrate)
+		out.MaxBitrate = int32(*flex.Int64FromFramework(ctx, data.MaxBitrate))
 	}
 	if !data.MaxLatency.IsNull() {
-		out.MaxLatency = flex.Int64FromFramework(ctx, data.MaxLatency)
+		out.MaxLatency = int32(*flex.Int64FromFramework(ctx, data.MaxLatency))
 	}
 	if !data.MaxSyncBuffer.IsNull() {
-		out.MaxSyncBuffer = flex.Int64FromFramework(ctx, data.MaxSyncBuffer)
+		out.MaxSyncBuffer = int32(*flex.Int64FromFramework(ctx, data.MaxSyncBuffer))
 	}
 	if !data.MediaStreamSourceConfigurations.IsNull() {
 		out.MediaStreamSourceConfigurations = flex.ExpandFrameworkSetNestedBlock(ctx, data.MediaStreamSourceConfigurations, r.expandMediaStreamSourceConfigurationCreate)
 	}
 	if !data.MinLatency.IsNull() {
-		out.MinLatency = flex.Int64FromFramework(ctx, data.MinLatency)
+		out.MinLatency = int32(*flex.Int64FromFramework(ctx, data.MinLatency))
 	}
 	if !data.Name.IsNull() {
 		out.Name = flex.StringFromFramework(ctx, data.Name)
@@ -1538,7 +1487,7 @@ func (r *resourceFlow) expandVPCInterfaceCreate(ctx context.Context, data vpcInt
 	return out
 }
 
-func (r *resourceFlow) flattenEntitlement(ctx context.Context, apiObject awstypes.Entitlement) types.List {
+func (r *resourceFlow) flattenEntitlement(ctx context.Context, apiObject awstypes.Entitlement) entitlementData {
 	attributeTypes := flex.AttributeTypesMust[entitlementData](ctx)
 	elementType := types.ObjectType{AttrTypes: attributeTypes}
 
@@ -1574,7 +1523,7 @@ func (r *resourceFlow) flattenEncryption(ctx context.Context, apiObject *awstype
 	})
 }
 
-func (r *resourceFlow) flattenMaintenance(ctx context.Context, apiObject *awstypes.Maintenance) types.List {
+func (r *resourceFlow) flattenMaintenance(ctx context.Context, apiObject awstypes.Maintenance) maintenanceData {
 	attributeTypes := flex.AttributeTypesMust[maintenanceData](ctx)
 	elementType := types.ObjectType{AttrTypes: attributeTypes}
 
@@ -1588,7 +1537,7 @@ func (r *resourceFlow) flattenMaintenance(ctx context.Context, apiObject *awstyp
 	})
 }
 
-func (r *resourceFlow) flattenMediaStream(ctx context.Context, apiObject awstypes.MediaStream) types.List {
+func (r *resourceFlow) flattenMediaStream(ctx context.Context, apiObject awstypes.MediaStream) mediaStreamData {
 	attributeTypes := flex.AttributeTypesMust[mediaStreamData](ctx)
 	elementType := types.ObjectType{AttrTypes: attributeTypes}
 
@@ -1635,7 +1584,7 @@ func (r *resourceFlow) flattenMediaStreamAttributeFmtp(ctx context.Context, apiO
 	})
 }
 
-func (r *resourceFlow) flattenOutput(ctx context.Context, apiObject awstypes.Output) types.List {
+func (r *resourceFlow) flattenOutput(ctx context.Context, apiObject awstypes.Output) outputData {
 	attributeTypes := flex.AttributeTypesMust[outputData](ctx)
 	elementType := types.ObjectType{AttrTypes: attributeTypes}
 
@@ -1751,7 +1700,7 @@ func (r *resourceFlow) flattenVPCInterfaceAttachment(ctx context.Context, apiObj
 	})
 }
 
-func (r *resourceFlow) flattenSource(ctx context.Context, apiObject awstypes.Source) types.List {
+func (r *resourceFlow) flattenSource(ctx context.Context, apiObject awstypes.Source) sourceData {
 	attributeTypes := flex.AttributeTypesMust[sourceData](ctx)
 	elementType := types.ObjectType{AttrTypes: attributeTypes}
 
@@ -1841,20 +1790,21 @@ func (r *resourceFlow) flattenSourceFailoverConfigSourcePriority(ctx context.Con
 }
 
 type resourceFlowData struct {
-	FlowArn              fwtypes.ARN  `tfsdk:"arn"`
-	Name                 types.String `tfsdk:"name"`
-	AvailabilityZone     types.String `tfsdk:"availability_zone"`
-	Entitlements         types.List   `tfsdk:"entitlement"`
-	Maintenance          types.List   `tfsdk:"maintenance"`
-	MediaStreams         types.List   `tfsdk:"media_stream"`
-	Outputs              types.List   `tfsdk:"output"`
-	Sources              types.List   `tfsdk:"source"`
-	SourceFailoverConfig types.List   `tfsdk:"source_failover_config"`
-	VpcInterfaces        types.Set    `tfsdk:"vpc_interface"`
-	EgressIp             types.String `tfsdk:"egress_ip"`
-	Status               types.String `tfsdk:"status"`
-	Tags                 types.Map    `tfsdk:"tags"`
-	TagsAll              types.Map    `tfsdk:"tags_all"`
+	FlowArn              fwtypes.ARN    `tfsdk:"arn"`
+	Name                 types.String   `tfsdk:"name"`
+	AvailabilityZone     types.String   `tfsdk:"availability_zone"`
+	Entitlements         types.List     `tfsdk:"entitlement"`
+	Maintenance          types.List     `tfsdk:"maintenance"`
+	MediaStreams         types.List     `tfsdk:"media_stream"`
+	Outputs              types.List     `tfsdk:"output"`
+	Sources              types.List     `tfsdk:"source"`
+	SourceFailoverConfig types.List     `tfsdk:"source_failover_config"`
+	VpcInterfaces        types.Set      `tfsdk:"vpc_interface"`
+	EgressIp             types.String   `tfsdk:"egress_ip"`
+	Status               types.String   `tfsdk:"status"`
+	Timeouts             timeouts.Value `tfsdk:"timeouts"`
+	Tags                 types.Map      `tfsdk:"tags"`
+	TagsAll              types.Map      `tfsdk:"tags_all"`
 }
 
 type entitlementData struct {
@@ -1914,6 +1864,7 @@ type mediaStreamAttributeFmtpData struct {
 
 type outputData struct {
 	Name                             types.String `tfsdk:"name"`
+	CidrAllowList                    types.List   `tfsdk:"cidr_allow_list"`
 	OutputArn                        fwtypes.ARN  `tfsdk:"arn"`
 	BridgeArn                        fwtypes.ARN  `tfsdk:"bridge_arn"`
 	DataTransferSubscriberFeePercent types.Int64  `tfsdk:"data_transfer_subscriber_fee_percent"`
@@ -1922,9 +1873,15 @@ type outputData struct {
 	Encryption                       types.List   `tfsdk:"encryption"`
 	EntitlementArn                   fwtypes.ARN  `tfsdk:"entitlement_arn"`
 	ListenerAddress                  types.String `tfsdk:"listener_address"`
+	MaxLatency                       types.Int64  `tfsdk:"max_latency"`
 	MediaLiveInputArn                fwtypes.ARN  `tfsdk:"media_live_input_arn"`
 	MediaStreamOutputConfigurations  types.Set    `tfsdk:"media_stream_output_configurations"`
+	MinLatency                       types.Int64  `tfsdk:"min_latency"`
 	Port                             types.Int64  `tfsdk:"port"`
+	Protocol                         types.String `tfsdk:"protocol"`
+	SenderControlPort                types.Int64  `tfsdk:"sender_control_port"`
+	SmoothingLatency                 types.Int64  `tfsdk:"smoothing_latency"`
+	StreamId                         types.String `tfsdk:"stream_id"`
 	Transport                        types.List   `tfsdk:"transport"`
 	VpcInterfaceAttachment           types.List   `tfsdk:"vpc_interface_attachment"`
 }
@@ -1972,7 +1929,7 @@ type sourceData struct {
 	SenderIpAddress                  types.String `tfsdk:"sender_ip_address"`
 	SourceListenerAddress            types.String `tfsdk:"listener_address"`
 	SourceListenerPort               types.Int64  `tfsdk:"listener_port"`
-	StreamId                         types.Int64  `tfsdk:"stream_id"`
+	StreamId                         types.String `tfsdk:"stream_id"`
 	Transport                        types.List   `tfsdk:"transport"`
 	VpcInterfaceName                 types.String `tfsdk:"vpc_interface_name"`
 	WhitelistCidr                    types.String `tfsdk:"whitelist_cidr"`
@@ -2013,14 +1970,4 @@ type vpcInterfaceData struct {
 	SubnetId             types.String `tfsdk:"subnet_id"`
 	NetworkInterfaceType types.String `tfsdk:"network_interface_type"`
 	NetworkInterfaceIds  types.List   `tfsdk:"network_interface_ids"`
-}
-
-type complexArgumentData struct {
-	NestedRequired types.String `tfsdk:"nested_required"`
-	NestedOptional types.String `tfsdk:"nested_optional"`
-}
-
-var complexArgumentAttrTypes = map[string]attr.Type{
-	"nested_required": types.StringType,
-	"nested_optional": types.StringType,
 }
